@@ -2,8 +2,8 @@ name: Omnetra Scheduled Post Publisher
 
 on:
   schedule:
-    # Runs every 15 minutes to check for pending scheduled posts
-    - cron: '*/15 * * * *'
+    # Autonomous cloud check every 5 minutes (Runs 24/7 on GitHub servers, Mac can be OFF)
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       reason:
