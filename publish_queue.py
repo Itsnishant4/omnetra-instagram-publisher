@@ -33,11 +33,13 @@ def parse_iso_time(iso_str):
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
 
-def create_container(media_url, media_type, caption, cover_url=None):
+def create_container(media_url, media_type, caption, cover_url=None, ig_user_id=None, access_token=None):
     """Creates Instagram Media Container via Meta Graph API."""
-    url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media"
+    target_ig = ig_user_id or IG_USER_ID
+    target_token = access_token or META_ACCESS_TOKEN
+    url = f"https://graph.facebook.com/v19.0/{target_ig}/media"
     payload = {
-        "access_token": META_ACCESS_TOKEN,
+        "access_token": target_token,
         "caption": caption
     }
 
@@ -45,12 +47,13 @@ def create_container(media_url, media_type, caption, cover_url=None):
     if mtype in ("REELS", "VIDEO"):
         payload["media_type"] = "REELS"
         payload["video_url"] = media_url
+        payload["share_to_feed"] = "true"
         if cover_url:
             payload["cover_url"] = cover_url
     else:
         payload["image_url"] = media_url
 
-    log(f"Creating {mtype} container for media: {media_url[:60]}...")
+    log(f"Creating {mtype} container for media: {media_url[:60]} on IG {target_ig}...")
     res = requests.post(url, data=payload)
     data = res.json()
 
@@ -59,9 +62,10 @@ def create_container(media_url, media_type, caption, cover_url=None):
 
     return data["id"]
 
-def wait_for_container(container_id, max_wait_seconds=600):
+def wait_for_container(container_id, max_wait_seconds=600, access_token=None):
     """Polls container status until FINISHED or ERROR."""
-    url = f"https://graph.facebook.com/v19.0/{container_id}?fields=status_code,status&access_token={META_ACCESS_TOKEN}"
+    target_token = access_token or META_ACCESS_TOKEN
+    url = f"https://graph.facebook.com/v19.0/{container_id}?fields=status_code,status&access_token={target_token}"
     start = time.time()
 
     while time.time() - start < max_wait_seconds:
@@ -78,15 +82,17 @@ def wait_for_container(container_id, max_wait_seconds=600):
 
     raise TimeoutError(f"Container {container_id} did not finish within {max_wait_seconds}s")
 
-def publish_container(container_id):
+def publish_container(container_id, ig_user_id=None, access_token=None):
     """Publishes the finished container to Instagram."""
-    url = f"https://graph.facebook.com/v19.0/{IG_USER_ID}/media_publish"
+    target_ig = ig_user_id or IG_USER_ID
+    target_token = access_token or META_ACCESS_TOKEN
+    url = f"https://graph.facebook.com/v19.0/{target_ig}/media_publish"
     payload = {
         "creation_id": container_id,
-        "access_token": META_ACCESS_TOKEN
+        "access_token": target_token
     }
 
-    log(f"Publishing container {container_id}...")
+    log(f"Publishing container {container_id} to IG {target_ig}...")
     res = requests.post(url, data=payload)
     data = res.json()
 
@@ -96,7 +102,7 @@ def publish_container(container_id):
     post_id = data["id"]
 
     # Fetch permalink
-    info_url = f"https://graph.facebook.com/v19.0/{post_id}?fields=id,permalink,media_type,timestamp&access_token={META_ACCESS_TOKEN}"
+    info_url = f"https://graph.facebook.com/v19.0/{post_id}?fields=id,permalink,media_type,timestamp&access_token={target_token}"
     info = requests.get(info_url).json()
     permalink = info.get("permalink", f"https://www.instagram.com/p/{post_id}/")
 
@@ -151,15 +157,17 @@ def process_queue():
             caption = item.get("caption", "")
             cover_url = item.get("cover_url")
             x02_filename = item.get("x02_filename")
+            item_ig = item.get("ig_user_id") or IG_USER_ID
+            item_token = item.get("access_token") or META_ACCESS_TOKEN
 
             # 1. Create container
-            container_id = create_container(media_url, media_type, caption, cover_url)
+            container_id = create_container(media_url, media_type, caption, cover_url, ig_user_id=item_ig, access_token=item_token)
 
             # 2. Wait for container to be ready
-            wait_for_container(container_id)
+            wait_for_container(container_id, access_token=item_token)
 
             # 3. Publish
-            post_id, permalink = publish_container(container_id)
+            post_id, permalink = publish_container(container_id, ig_user_id=item_ig, access_token=item_token)
             log(f"🎉 Post is LIVE on Instagram! ID: {post_id} | Link: {permalink}")
 
             # 4. Cleanup X02 storage
