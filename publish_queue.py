@@ -9,8 +9,10 @@ import sys
 import json
 import time
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+IST = timezone(timedelta(hours=5, minutes=30))
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -27,10 +29,10 @@ def log(msg):
     print(f"[{now_str}] {msg}", flush=True)
 
 def parse_iso_time(iso_str):
-    """Parses ISO timestamp into timezone-aware datetime."""
+    """Parses ISO timestamp into timezone-aware datetime (defaulting naive timestamps to IST +05:30)."""
     dt = datetime.fromisoformat(iso_str)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=IST)
     return dt
 
 def create_container(media_url, media_type, caption, cover_url=None, ig_user_id=None, access_token=None):
