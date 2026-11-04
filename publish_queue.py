@@ -110,6 +110,32 @@ def publish_container(container_id, ig_user_id=None, access_token=None):
 
     return post_id, permalink
 
+def check_existing_published_media(caption, ig_user_id=None, access_token=None):
+    """Checks whether this post has already been published to Instagram to prevent double posting."""
+    target_ig = ig_user_id or IG_USER_ID
+    target_token = access_token or META_ACCESS_TOKEN
+    if not target_ig or not target_token:
+        return None
+    url = f"https://graph.facebook.com/v19.0/{target_ig}/media"
+    try:
+        res = requests.get(url, params={
+            "access_token": target_token,
+            "fields": "id,caption,media_type,timestamp,permalink",
+            "limit": 15
+        }, timeout=15)
+        if res.status_code == 200:
+            posts = res.json().get("data", [])
+            clean_needle = (caption or "").strip()[:40].lower()
+            if not clean_needle:
+                return None
+            for p in posts:
+                p_cap = (p.get("caption") or "").strip().lower()
+                if clean_needle in p_cap or (p_cap and p_cap[:40] in clean_needle):
+                    return p
+    except Exception as e:
+        log(f"Notice: Failed to check existing IG media: {e}")
+    return None
+
 def cleanup_x02(filename):
     """Deletes temporary file from X02 storage."""
     if not filename or not X02_API_KEY:
@@ -161,6 +187,26 @@ def process_queue():
             x02_filename = item.get("x02_filename")
             item_ig = item.get("ig_user_id") or IG_USER_ID
             item_token = item.get("access_token") or META_ACCESS_TOKEN
+
+            # 0. Deduplication Guard: Check if post already exists on Instagram
+            existing = check_existing_published_media(caption, ig_user_id=item_ig, access_token=item_token)
+            if existing:
+                post_id = existing["id"]
+                permalink = existing.get("permalink", f"https://www.instagram.com/p/{post_id}/")
+                log(f"⚡ Duplicate Guard: Reel is ALREADY published on Instagram! ID: {post_id} | Link: {permalink}")
+                if x02_filename:
+                    cleanup_x02(x02_filename)
+                item["post_id"] = post_id
+                item["permalink"] = permalink
+                item["published_at"] = existing.get("timestamp", datetime.now(timezone.utc).isoformat())
+                item["status"] = "PUBLISHED"
+                dest_file = PUBLISHED_DIR / qfile.name
+                with open(dest_file, "w", encoding="utf-8") as f:
+                    json.dump(item, f, indent=2)
+                qfile.unlink()
+                log(f"✅ Moved {qfile.name} -> published/{dest_file.name} (duplicate publishing prevented)")
+                published_count += 1
+                continue
 
             # 1. Create container
             container_id = create_container(media_url, media_type, caption, cover_url, ig_user_id=item_ig, access_token=item_token)
