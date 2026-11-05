@@ -24,6 +24,7 @@ META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "").strip()
 IG_USER_ID = os.environ.get("IG_USER_ID", "").strip()
 X02_API_KEY = os.environ.get("X02_API_KEY", "").strip()
 CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY", "").strip()
+FLIQ_API_KEY = os.environ.get("FLIQ_API_KEY", "").strip()
 
 def delete_cronjob(job_id):
     if not job_id or not CRONJOB_API_KEY:
@@ -33,6 +34,15 @@ def delete_cronjob(job_id):
         log(f"🗑️ Deleted one-shot cron-job #{job_id} after publish (status {r.status_code})")
     except Exception as e:
         log(f"Notice: Failed to delete cron-job #{job_id}: {e}")
+
+def delete_fliq_job(job_id):
+    if not job_id or not FLIQ_API_KEY:
+        return
+    try:
+        r = requests.delete(f"https://api.fliq.sh/jobs/{job_id}", headers={"Authorization": f"Bearer {FLIQ_API_KEY}"}, timeout=10)
+        log(f"🗑️ Deleted fliq.sh job {job_id} after publish (status {r.status_code})")
+    except Exception as e:
+        log(f"Notice: Failed to delete fliq job {job_id}: {e}")
 
 def log(msg):
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -239,6 +249,8 @@ def process_queue(target_file_name=None):
                 item["status"] = "PUBLISHED"
                 if item.get("cron_job_id"):
                     delete_cronjob(item["cron_job_id"])
+                if item.get("fliq_job_id"):
+                    delete_fliq_job(item["fliq_job_id"])
 
                 dest_file = PUBLISHED_DIR / qfile.name
                 with open(dest_file, "w", encoding="utf-8") as f:
@@ -279,6 +291,8 @@ def process_queue(target_file_name=None):
 
             if item.get("cron_job_id"):
                 delete_cronjob(item["cron_job_id"])
+            if item.get("fliq_job_id"):
+                delete_fliq_job(item["fliq_job_id"])
 
             dest_file = PUBLISHED_DIR / qfile.name
             with open(dest_file, "w", encoding="utf-8") as f:
