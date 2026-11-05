@@ -180,6 +180,19 @@ def process_queue():
 
             log(f"🚀 Processing {qfile.name} (scheduled for {scheduled_dt.isoformat()})...")
 
+            lock_file = qfile.with_name(f".lock_{qfile.stem}")
+            if lock_file.exists():
+                try:
+                    if time.time() - lock_file.stat().st_mtime < 600:
+                        log(f"🔒 {qfile.name} is locked by an active publishing job. Skipping.")
+                        continue
+                except Exception:
+                    pass
+            try:
+                lock_file.write_text(str(os.getpid()))
+            except Exception:
+                pass
+
             media_url = item["media_url"]
             media_type = item.get("media_type", "IMAGE")
             caption = item.get("caption", "")
@@ -234,10 +247,20 @@ def process_queue():
                 json.dump(item, f, indent=2)
 
             qfile.unlink()
+            if lock_file.exists():
+                try:
+                    lock_file.unlink()
+                except Exception:
+                    pass
             log(f"✅ Moved {qfile.name} -> published/{dest_file.name}")
             published_count += 1
 
         except Exception as e:
+            if 'lock_file' in locals() and lock_file.exists():
+                try:
+                    lock_file.unlink()
+                except Exception:
+                    pass
             log(f"❌ Error processing {qfile.name}: {e}")
 
     log(f"Finished processing. Successfully published: {published_count} post(s).")
