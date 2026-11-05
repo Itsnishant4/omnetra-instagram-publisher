@@ -23,6 +23,16 @@ PUBLISHED_DIR = BASE_DIR / "published"
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "").strip()
 IG_USER_ID = os.environ.get("IG_USER_ID", "").strip()
 X02_API_KEY = os.environ.get("X02_API_KEY", "").strip()
+CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY", "").strip()
+
+def delete_cronjob(job_id):
+    if not job_id or not CRONJOB_API_KEY:
+        return
+    try:
+        r = requests.delete(f"https://api.cron-job.org/jobs/{job_id}", headers={"Authorization": f"Bearer {CRONJOB_API_KEY}"}, timeout=10)
+        log(f"🗑️ Deleted one-shot cron-job #{job_id} after publish (status {r.status_code})")
+    except Exception as e:
+        log(f"Notice: Failed to delete cron-job #{job_id}: {e}")
 
 def log(msg):
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -227,7 +237,12 @@ def process_queue(target_file_name=None):
                 item["permalink"] = permalink
                 item["published_at"] = existing.get("timestamp", datetime.now(timezone.utc).isoformat())
                 item["status"] = "PUBLISHED"
-                dest_file = PUBLISHED_DIR / qfile.name
+                if item.get("cron_job_id"):
+                    delete_cronjob(item["cron_job_id"])
+                if item.get("cron_job_id"):
+                delete_cronjob(item["cron_job_id"])
+
+            dest_file = PUBLISHED_DIR / qfile.name
                 with open(dest_file, "w", encoding="utf-8") as f:
                     json.dump(item, f, indent=2)
                 qfile.unlink(missing_ok=True)
@@ -263,6 +278,9 @@ def process_queue(target_file_name=None):
             item["container_id"] = container_id
             item["published_at"] = datetime.now(timezone.utc).isoformat()
             item["status"] = "PUBLISHED"
+
+            if item.get("cron_job_id"):
+                delete_cronjob(item["cron_job_id"])
 
             dest_file = PUBLISHED_DIR / qfile.name
             with open(dest_file, "w", encoding="utf-8") as f:
