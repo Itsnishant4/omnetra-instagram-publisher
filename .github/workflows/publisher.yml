@@ -11,6 +11,11 @@ on:
         required: false
         default: 'Manual check triggered'
 
+# Prevent concurrent runs: only ONE workflow can execute at any time
+concurrency:
+  group: instagram-publisher-queue
+  cancel-in-progress: false
+
 # Grant permissions to commit and push changes back to the repository
 permissions:
   contents: write

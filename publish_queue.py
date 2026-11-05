@@ -121,17 +121,26 @@ def check_existing_published_media(caption, ig_user_id=None, access_token=None):
         res = requests.get(url, params={
             "access_token": target_token,
             "fields": "id,caption,media_type,timestamp,permalink",
-            "limit": 15
+            "limit": 30
         }, timeout=15)
         if res.status_code == 200:
             posts = res.json().get("data", [])
-            clean_needle = (caption or "").strip()[:40].lower()
-            if not clean_needle:
-                return None
+            raw_caption = (caption or "").strip()
+            clean_needle = " ".join(raw_caption.split()).lower()
+            needle_words = [w for w in clean_needle.split() if len(w) > 3][:8]
+
             for p in posts:
-                p_cap = (p.get("caption") or "").strip().lower()
-                if clean_needle in p_cap or (p_cap and p_cap[:40] in clean_needle):
+                p_cap = " ".join((p.get("caption") or "").split()).lower()
+                # 1. Exact or substring match on first 40 chars
+                if clean_needle[:40] and clean_needle[:40] in p_cap:
                     return p
+                if p_cap[:40] and p_cap[:40] in clean_needle:
+                    return p
+                # 2. Significant word overlap (if >= 4 key words match)
+                if len(needle_words) >= 4:
+                    matches = sum(1 for w in needle_words if w in p_cap)
+                    if matches >= 4:
+                        return p
     except Exception as e:
         log(f"Notice: Failed to check existing IG media: {e}")
     return None
@@ -147,7 +156,7 @@ def cleanup_x02(filename):
     except Exception as e:
         log(f"Notice: X02 cleanup failed for {filename}: {e}")
 
-def process_queue():
+def process_queue(target_file_name=None):
     if not META_ACCESS_TOKEN or not IG_USER_ID:
         log("❌ ERROR: Missing META_ACCESS_TOKEN or IG_USER_ID environment variables!")
         sys.exit(1)
@@ -155,7 +164,23 @@ def process_queue():
     now = datetime.now(timezone.utc)
     log(f"🔍 Checking queue at {now.isoformat()}...")
 
-    queue_files = sorted(QUEUE_DIR.glob("*.json"))
+    # Recover any stale .processing files older than 15 minutes
+    for proc_f in QUEUE_DIR.glob("*.processing"):
+        try:
+            if (now.timestamp() - proc_f.stat().st_mtime) > 900:
+                recovered_name = proc_f.with_name(f"{proc_f.stem}.json")
+                proc_f.rename(recovered_name)
+                log(f"♻️ Recovered stale processing file: {proc_f.name} -> {recovered_name.name}")
+        except Exception:
+            pass
+
+    if target_file_name:
+        t_clean = Path(target_file_name).name
+        target_f = QUEUE_DIR / t_clean
+        queue_files = [target_f] if target_f.exists() else []
+    else:
+        queue_files = sorted(QUEUE_DIR.glob("*.json"))
+
     if not queue_files:
         log("📭 Queue is empty. Nothing to publish.")
         return 0
@@ -164,6 +189,7 @@ def process_queue():
     published_count = 0
 
     for qfile in queue_files:
+        processing_file = None
         try:
             with open(qfile, "r", encoding="utf-8") as f:
                 item = json.load(f)
@@ -174,32 +200,20 @@ def process_queue():
                 continue
 
             scheduled_dt = parse_iso_time(publish_at_str)
-            if scheduled_dt > now:
+            # If target_file_name was NOT explicitly given, check schedule time
+            if not target_file_name and scheduled_dt > now:
                 log(f"⏳ {qfile.name} scheduled for {scheduled_dt.isoformat()} (future, skipping).")
                 continue
 
             log(f"🚀 Processing {qfile.name} (scheduled for {scheduled_dt.isoformat()})...")
 
-            lock_file = qfile.with_name(f".lock_{qfile.stem}")
-            if lock_file.exists():
-                try:
-                    if time.time() - lock_file.stat().st_mtime < 600:
-                        log(f"🔒 {qfile.name} is locked by an active publishing job. Skipping.")
-                        continue
-                except Exception:
-                    pass
-            try:
-                lock_file.write_text(str(os.getpid()))
-            except Exception:
-                pass
-
-            media_url = item["media_url"]
-            media_type = item.get("media_type", "IMAGE")
-            caption = item.get("caption", "")
-            cover_url = item.get("cover_url")
-            x02_filename = item.get("x02_filename")
             item_ig = item.get("ig_user_id") or IG_USER_ID
             item_token = item.get("access_token") or META_ACCESS_TOKEN
+            caption = item.get("caption", "")
+            media_url = item["media_url"]
+            media_type = item.get("media_type", "IMAGE")
+            cover_url = item.get("cover_url")
+            x02_filename = item.get("x02_filename")
 
             # 0. Deduplication Guard: Check if post already exists on Instagram
             existing = check_existing_published_media(caption, ig_user_id=item_ig, access_token=item_token)
@@ -216,26 +230,34 @@ def process_queue():
                 dest_file = PUBLISHED_DIR / qfile.name
                 with open(dest_file, "w", encoding="utf-8") as f:
                     json.dump(item, f, indent=2)
-                qfile.unlink()
+                qfile.unlink(missing_ok=True)
                 log(f"✅ Moved {qfile.name} -> published/{dest_file.name} (duplicate publishing prevented)")
                 published_count += 1
                 continue
 
-            # 1. Create container
+            # 1. ATOMIC CLAIM: Rename .json to .processing so no concurrent runner can EVER pick it up!
+            processing_file = qfile.with_name(f"{qfile.stem}.processing")
+            try:
+                qfile.rename(processing_file)
+            except Exception as claim_err:
+                log(f"🔒 {qfile.name} was already claimed by another runner ({claim_err}). Skipping.")
+                continue
+
+            # 2. Create container
             container_id = create_container(media_url, media_type, caption, cover_url, ig_user_id=item_ig, access_token=item_token)
 
-            # 2. Wait for container to be ready
+            # 3. Wait for container to be ready
             wait_for_container(container_id, access_token=item_token)
 
-            # 3. Publish
+            # 4. Publish
             post_id, permalink = publish_container(container_id, ig_user_id=item_ig, access_token=item_token)
             log(f"🎉 Post is LIVE on Instagram! ID: {post_id} | Link: {permalink}")
 
-            # 4. Cleanup X02 storage
+            # 5. Cleanup X02 storage
             if x02_filename:
                 cleanup_x02(x02_filename)
 
-            # 5. Move from queue to published
+            # 6. Move from queue to published
             item["post_id"] = post_id
             item["permalink"] = permalink
             item["container_id"] = container_id
@@ -246,19 +268,15 @@ def process_queue():
             with open(dest_file, "w", encoding="utf-8") as f:
                 json.dump(item, f, indent=2)
 
-            qfile.unlink()
-            if lock_file.exists():
-                try:
-                    lock_file.unlink()
-                except Exception:
-                    pass
-            log(f"✅ Moved {qfile.name} -> published/{dest_file.name}")
+            processing_file.unlink(missing_ok=True)
+            log(f"✅ Successfully published {qfile.name} -> published/{dest_file.name}")
             published_count += 1
 
         except Exception as e:
-            if 'lock_file' in locals() and lock_file.exists():
+            if processing_file and processing_file.exists():
                 try:
-                    lock_file.unlink()
+                    # Restore .json file on error so it can be safely retried
+                    processing_file.rename(qfile)
                 except Exception:
                     pass
             log(f"❌ Error processing {qfile.name}: {e}")
@@ -267,4 +285,8 @@ def process_queue():
     return published_count
 
 if __name__ == "__main__":
-    process_queue()
+    import argparse
+    parser = argparse.ArgumentParser(description="Omnetra Instagram Queue Publisher")
+    parser.add_argument("--target", help="Specific queue file to publish (optional)")
+    args = parser.parse_args()
+    process_queue(target_file_name=args.target)
