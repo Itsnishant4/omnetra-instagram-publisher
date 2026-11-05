@@ -239,10 +239,8 @@ def process_queue(target_file_name=None):
                 item["status"] = "PUBLISHED"
                 if item.get("cron_job_id"):
                     delete_cronjob(item["cron_job_id"])
-                if item.get("cron_job_id"):
-                delete_cronjob(item["cron_job_id"])
 
-            dest_file = PUBLISHED_DIR / qfile.name
+                dest_file = PUBLISHED_DIR / qfile.name
                 with open(dest_file, "w", encoding="utf-8") as f:
                     json.dump(item, f, indent=2)
                 qfile.unlink(missing_ok=True)
