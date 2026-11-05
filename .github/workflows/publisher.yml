@@ -1,15 +1,12 @@
 name: Omnetra Scheduled Post Publisher
 
 on:
-  schedule:
-    # Autonomous cloud check every 5 minutes (Runs 24/7 on GitHub servers, Mac can be OFF)
-    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       reason:
-        description: 'Manual run reason'
+        description: 'Pinpoint trigger from cron-job.org or manual dispatch'
         required: false
-        default: 'Manual check triggered'
+        default: 'Scheduled post trigger'
 
 # Prevent concurrent runs: only ONE workflow can execute at any time
 concurrency:
