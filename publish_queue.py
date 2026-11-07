@@ -130,41 +130,6 @@ def publish_container(container_id, ig_user_id=None, access_token=None):
 
     return post_id, permalink
 
-def check_existing_published_media(caption, ig_user_id=None, access_token=None):
-    """Checks whether this post has already been published to Instagram to prevent double posting."""
-    target_ig = ig_user_id or IG_USER_ID
-    target_token = access_token or META_ACCESS_TOKEN
-    if not target_ig or not target_token:
-        return None
-    url = f"https://graph.facebook.com/v19.0/{target_ig}/media"
-    try:
-        res = requests.get(url, params={
-            "access_token": target_token,
-            "fields": "id,caption,media_type,timestamp,permalink",
-            "limit": 30
-        }, timeout=15)
-        if res.status_code == 200:
-            posts = res.json().get("data", [])
-            raw_caption = (caption or "").strip()
-            clean_needle = " ".join(raw_caption.split()).lower()
-            needle_words = [w for w in clean_needle.split() if len(w) > 3][:8]
-
-            for p in posts:
-                p_cap = " ".join((p.get("caption") or "").split()).lower()
-                # 1. Exact or substring match on first 40 chars
-                if clean_needle[:40] and clean_needle[:40] in p_cap:
-                    return p
-                if p_cap[:40] and p_cap[:40] in clean_needle:
-                    return p
-                # 2. Significant word overlap (if >= 4 key words match)
-                if len(needle_words) >= 4:
-                    matches = sum(1 for w in needle_words if w in p_cap)
-                    if matches >= 4:
-                        return p
-    except Exception as e:
-        log(f"Notice: Failed to check existing IG media: {e}")
-    return None
-
 def cleanup_x02(filename):
     """Deletes temporary file from X02 storage."""
     if not filename or not X02_API_KEY:
@@ -234,31 +199,6 @@ def process_queue(target_file_name=None):
             media_type = item.get("media_type", "IMAGE")
             cover_url = item.get("cover_url")
             x02_filename = item.get("x02_filename")
-
-            # 0. Deduplication Guard: Check if post already exists on Instagram
-            existing = check_existing_published_media(caption, ig_user_id=item_ig, access_token=item_token)
-            if existing:
-                post_id = existing["id"]
-                permalink = existing.get("permalink", f"https://www.instagram.com/p/{post_id}/")
-                log(f"⚡ Duplicate Guard: Reel is ALREADY published on Instagram! ID: {post_id} | Link: {permalink}")
-                if x02_filename:
-                    cleanup_x02(x02_filename)
-                item["post_id"] = post_id
-                item["permalink"] = permalink
-                item["published_at"] = existing.get("timestamp", datetime.now(timezone.utc).isoformat())
-                item["status"] = "PUBLISHED"
-                if item.get("cron_job_id"):
-                    delete_cronjob(item["cron_job_id"])
-                if item.get("fliq_job_id"):
-                    delete_fliq_job(item["fliq_job_id"])
-
-                dest_file = PUBLISHED_DIR / qfile.name
-                with open(dest_file, "w", encoding="utf-8") as f:
-                    json.dump(item, f, indent=2)
-                qfile.unlink(missing_ok=True)
-                log(f"✅ Moved {qfile.name} -> published/{dest_file.name} (duplicate publishing prevented)")
-                published_count += 1
-                continue
 
             # 1. ATOMIC CLAIM: Rename .json to .processing so no concurrent runner can EVER pick it up!
             processing_file = qfile.with_name(f"{qfile.stem}.processing")
