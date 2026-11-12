@@ -41,6 +41,10 @@ jobs:
         env:
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          META_ACCESS_TOKEN_OMNETRA: ${{ secrets.META_ACCESS_TOKEN_OMNETRA }}
+          IG_USER_ID_OMNETRA: ${{ secrets.IG_USER_ID_OMNETRA }}
+          META_ACCESS_TOKEN_VIDLINKS: ${{ secrets.META_ACCESS_TOKEN_VIDLINKS }}
+          IG_USER_ID_VIDLINKS: ${{ secrets.IG_USER_ID_VIDLINKS }}
           X02_API_KEY: ${{ secrets.X02_API_KEY }}
           CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
           FLIQ_API_KEY: ${{ secrets.FLIQ_API_KEY }}

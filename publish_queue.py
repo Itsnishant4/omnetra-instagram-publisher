@@ -22,9 +22,36 @@ PUBLISHED_DIR = BASE_DIR / "published"
 # Secrets from Environment
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "").strip()
 IG_USER_ID = os.environ.get("IG_USER_ID", "").strip()
+META_ACCESS_TOKEN_OMNETRA = os.environ.get("META_ACCESS_TOKEN_OMNETRA", "").strip()
+IG_USER_ID_OMNETRA = os.environ.get("IG_USER_ID_OMNETRA", "").strip()
+META_ACCESS_TOKEN_VIDLINKS = os.environ.get("META_ACCESS_TOKEN_VIDLINKS", "").strip()
+IG_USER_ID_VIDLINKS = os.environ.get("IG_USER_ID_VIDLINKS", "").strip()
 X02_API_KEY = os.environ.get("X02_API_KEY", "").strip()
 CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY", "").strip()
 FLIQ_API_KEY = os.environ.get("FLIQ_API_KEY", "").strip()
+
+
+def resolve_account_credentials(item):
+    """Resolves (ig_user_id, access_token) securely from environment secrets or legacy queue fields."""
+    target_acc = str(item.get("target_account") or "").lower()
+    item_ig = str(item.get("ig_user_id") or "").strip()
+    caption = str(item.get("caption") or "").lower()
+    x02_fn = str(item.get("x02_filename") or "").lower()
+
+    is_vidlinks = (
+        "vidlinks" in target_acc
+        or (IG_USER_ID_VIDLINKS and item_ig == IG_USER_ID_VIDLINKS)
+        or "vidlinks" in x02_fn
+        or "vidlinks" in caption
+    )
+    if is_vidlinks:
+        resolved_ig = item_ig or IG_USER_ID_VIDLINKS or IG_USER_ID
+        resolved_tok = META_ACCESS_TOKEN_VIDLINKS or item.get("access_token") or META_ACCESS_TOKEN
+        return resolved_ig, resolved_tok
+
+    resolved_ig = item_ig or IG_USER_ID_OMNETRA or IG_USER_ID
+    resolved_tok = META_ACCESS_TOKEN_OMNETRA or item.get("access_token") or META_ACCESS_TOKEN
+    return resolved_ig, resolved_tok
 
 def delete_cronjob(job_id):
     if not job_id or not CRONJOB_API_KEY:
@@ -142,10 +169,6 @@ def cleanup_x02(filename):
         log(f"Notice: X02 cleanup failed for {filename}: {e}")
 
 def process_queue(target_file_name=None):
-    if not META_ACCESS_TOKEN or not IG_USER_ID:
-        log("❌ ERROR: Missing META_ACCESS_TOKEN or IG_USER_ID environment variables!")
-        sys.exit(1)
-
     now = datetime.now(timezone.utc)
     log(f"🔍 Checking queue at {now.isoformat()}...")
 
@@ -192,8 +215,9 @@ def process_queue(target_file_name=None):
 
             log(f"🚀 Processing {qfile.name} (scheduled for {scheduled_dt.isoformat()})...")
 
-            item_ig = item.get("ig_user_id") or IG_USER_ID
-            item_token = item.get("access_token") or META_ACCESS_TOKEN
+            item_ig, item_token = resolve_account_credentials(item)
+            if not item_ig or not item_token:
+                raise RuntimeError(f"Missing IG credentials for target_account={item.get('target_account')}")
             caption = item.get("caption", "")
             media_url = item["media_url"]
             media_type = item.get("media_type", "IMAGE")
@@ -222,7 +246,8 @@ def process_queue(target_file_name=None):
             if x02_filename:
                 cleanup_x02(x02_filename)
 
-            # 6. Move from queue to published
+            # 6. Move from queue to published (never commit plaintext access tokens)
+            item.pop("access_token", None)
             item["post_id"] = post_id
             item["permalink"] = permalink
             item["container_id"] = container_id
@@ -247,6 +272,7 @@ def process_queue(target_file_name=None):
                 if processing_file and processing_file.exists():
                     with open(processing_file, "r", encoding="utf-8") as f:
                         failed_item = json.load(f)
+                    failed_item.pop("access_token", None)
                     if failed_item.get("cron_job_id"):
                         delete_cronjob(failed_item.pop("cron_job_id"))
                     if failed_item.get("fliq_job_id"):
