@@ -82,6 +82,34 @@ def parse_iso_time(iso_str):
         dt = dt.replace(tzinfo=IST)
     return dt
 
+def _http_json_with_retry(method, url, *, data=None, timeout=60, max_attempts=3):
+    """Performs HTTP request with timeout, exponential backoff retries, and safe JSON parsing."""
+    last_err = None
+    for attempt in range(max_attempts):
+        try:
+            res = requests.request(method, url, data=data, timeout=timeout)
+            try:
+                body = res.json()
+            except ValueError:
+                body = {"raw_text": res.text[:400], "status_code": res.status_code}
+            if res.status_code in (429, 500, 502, 503, 504) and attempt < max_attempts - 1:
+                wait_s = 2 ** (attempt + 1)
+                log(f"⏳ Transient HTTP {res.status_code} from {url.split('?')[0]}; retrying in {wait_s}s...")
+                time.sleep(wait_s)
+                continue
+            if res.status_code >= 400 and "error" not in body and "id" not in body:
+                raise RuntimeError(f"HTTP {res.status_code}: {body}")
+            return body
+        except requests.RequestException as req_err:
+            last_err = req_err
+            if attempt < max_attempts - 1:
+                wait_s = 2 ** (attempt + 1)
+                log(f"⏳ Network error ({req_err}); retrying in {wait_s}s...")
+                time.sleep(wait_s)
+                continue
+            raise RuntimeError(f"Request failed after {max_attempts} attempts: {last_err}") from req_err
+    raise RuntimeError(f"Request failed: {last_err}")
+
 def create_container(media_url, media_type, caption, cover_url=None, ig_user_id=None, access_token=None):
     """Creates Instagram Media Container via Meta Graph API."""
     target_ig = ig_user_id or IG_USER_ID
@@ -103,8 +131,7 @@ def create_container(media_url, media_type, caption, cover_url=None, ig_user_id=
         payload["image_url"] = media_url
 
     log(f"Creating {mtype} container for media: {media_url[:60]} on IG {target_ig}...")
-    res = requests.post(url, data=payload)
-    data = res.json()
+    data = _http_json_with_retry("POST", url, data=payload, timeout=60)
 
     if "id" not in data:
         raise RuntimeError(f"Failed to create container: {json.dumps(data)}")
@@ -118,7 +145,7 @@ def wait_for_container(container_id, max_wait_seconds=600, access_token=None):
     start = time.time()
 
     while time.time() - start < max_wait_seconds:
-        res = requests.get(url).json()
+        res = _http_json_with_retry("GET", url, timeout=30)
         status_code = res.get("status_code")
         log(f"Container {container_id} status: {status_code} ({res.get('status', '')})")
 
@@ -142,18 +169,21 @@ def publish_container(container_id, ig_user_id=None, access_token=None):
     }
 
     log(f"Publishing container {container_id} to IG {target_ig}...")
-    res = requests.post(url, data=payload)
-    data = res.json()
+    data = _http_json_with_retry("POST", url, data=payload, timeout=60)
 
     if "id" not in data:
         raise RuntimeError(f"Failed to publish container: {json.dumps(data)}")
 
     post_id = data["id"]
 
-    # Fetch permalink
-    info_url = f"https://graph.facebook.com/v19.0/{post_id}?fields=id,permalink,media_type,timestamp&access_token={target_token}"
-    info = requests.get(info_url).json()
-    permalink = info.get("permalink", f"https://www.instagram.com/p/{post_id}/")
+    # Fetch permalink cleanly — never fail publish once post_id exists (prevents duplicate posting!)
+    permalink = f"https://www.instagram.com/p/{post_id}/"
+    try:
+        info_url = f"https://graph.facebook.com/v19.0/{post_id}?fields=id,permalink,media_type,timestamp&access_token={target_token}"
+        info = _http_json_with_retry("GET", info_url, timeout=25, max_attempts=2)
+        permalink = info.get("permalink") or permalink
+    except Exception as perm_err:
+        log(f"Notice: Could not fetch permalink for published post {post_id} ({perm_err}); using fallback URL.")
 
     return post_id, permalink
 
@@ -163,7 +193,7 @@ def cleanup_x02(filename):
         return
     url = f"https://up.x02.me/api/delete/{filename}?apiKey={X02_API_KEY}"
     try:
-        res = requests.get(url).json()
+        res = _http_json_with_retry("GET", url, timeout=15, max_attempts=2)
         log(f"X02 cleanup for {filename}: {res.get('message', 'ok')}")
     except Exception as e:
         log(f"Notice: X02 cleanup failed for {filename}: {e}")
@@ -223,6 +253,11 @@ def process_queue(target_file_name=None):
             media_type = item.get("media_type", "IMAGE")
             cover_url = item.get("cover_url")
             x02_filename = item.get("x02_filename")
+            cover_x02_filename = item.get("cover_x02_filename")
+
+            if item.get("status") == "FAILED" and not target_file_name:
+                log(f"⚠️ Skipping permanently failed {qfile.name} (retry_count={item.get('retry_count')}). Trigger manually or reschedule.")
+                continue
 
             # 1. ATOMIC CLAIM: Rename .json to .processing so no concurrent runner can EVER pick it up!
             processing_file = qfile.with_name(f"{qfile.stem}.processing")
@@ -242,22 +277,13 @@ def process_queue(target_file_name=None):
             post_id, permalink = publish_container(container_id, ig_user_id=item_ig, access_token=item_token)
             log(f"🎉 Post is LIVE on Instagram! ID: {post_id} | Link: {permalink}")
 
-            # 5. Cleanup X02 storage
-            if x02_filename:
-                cleanup_x02(x02_filename)
-
-            # 6. Move from queue to published (never commit plaintext access tokens)
+            # 5. Record published item FIRST (guarantees no duplicate IG post even if cleanup hits error)
             item.pop("access_token", None)
             item["post_id"] = post_id
             item["permalink"] = permalink
             item["container_id"] = container_id
             item["published_at"] = datetime.now(timezone.utc).isoformat()
             item["status"] = "PUBLISHED"
-
-            if item.get("cron_job_id"):
-                delete_cronjob(item["cron_job_id"])
-            if item.get("fliq_job_id"):
-                delete_fliq_job(item["fliq_job_id"])
 
             dest_file = PUBLISHED_DIR / qfile.name
             with open(dest_file, "w", encoding="utf-8") as f:
@@ -266,6 +292,16 @@ def process_queue(target_file_name=None):
             processing_file.unlink(missing_ok=True)
             log(f"✅ Successfully published {qfile.name} -> published/{dest_file.name}")
             published_count += 1
+
+            # 6. Post-publish cleanups (non-fatal)
+            if x02_filename:
+                cleanup_x02(x02_filename)
+            if cover_x02_filename:
+                cleanup_x02(cover_x02_filename)
+            if item.get("cron_job_id"):
+                delete_cronjob(item["cron_job_id"])
+            if item.get("fliq_job_id"):
+                delete_fliq_job(item["fliq_job_id"])
 
         except Exception as e:
             try:
@@ -277,11 +313,14 @@ def process_queue(target_file_name=None):
                         delete_cronjob(failed_item.pop("cron_job_id"))
                     if failed_item.get("fliq_job_id"):
                         delete_fliq_job(failed_item.pop("fliq_job_id"))
+                    retries = int(failed_item.get("retry_count") or 0) + 1
+                    failed_item["retry_count"] = retries
                     failed_item["last_error"] = str(e)
                     failed_item["last_failed_at"] = datetime.now(timezone.utc).isoformat()
+                    failed_item["status"] = "FAILED" if retries >= 3 else "QUEUED"
                     with open(processing_file, "w", encoding="utf-8") as f:
                         json.dump(failed_item, f, indent=2)
-                    # Restore .json file on error so it can be safely retried
+                    # Restore .json file so backup/manual retry can recover
                     processing_file.rename(qfile)
             except Exception:
                 if processing_file and processing_file.exists():

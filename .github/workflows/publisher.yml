@@ -7,6 +7,8 @@ on:
         description: 'Pinpoint trigger from cron-job.org or manual dispatch'
         required: false
         default: 'Scheduled post trigger'
+  schedule:
+    - cron: '*/30 * * * *'
 
 # Prevent concurrent runs: only ONE workflow can execute at any time
 concurrency:
