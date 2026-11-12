@@ -243,12 +243,26 @@ def process_queue(target_file_name=None):
             published_count += 1
 
         except Exception as e:
-            if processing_file and processing_file.exists():
-                try:
+            try:
+                if processing_file and processing_file.exists():
+                    with open(processing_file, "r", encoding="utf-8") as f:
+                        failed_item = json.load(f)
+                    if failed_item.get("cron_job_id"):
+                        delete_cronjob(failed_item.pop("cron_job_id"))
+                    if failed_item.get("fliq_job_id"):
+                        delete_fliq_job(failed_item.pop("fliq_job_id"))
+                    failed_item["last_error"] = str(e)
+                    failed_item["last_failed_at"] = datetime.now(timezone.utc).isoformat()
+                    with open(processing_file, "w", encoding="utf-8") as f:
+                        json.dump(failed_item, f, indent=2)
                     # Restore .json file on error so it can be safely retried
                     processing_file.rename(qfile)
-                except Exception:
-                    pass
+            except Exception:
+                if processing_file and processing_file.exists():
+                    try:
+                        processing_file.rename(qfile)
+                    except Exception:
+                        pass
             log(f"❌ Error processing {qfile.name}: {e}")
 
     log(f"Finished processing. Successfully published: {published_count} post(s).")

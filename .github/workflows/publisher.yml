@@ -42,6 +42,8 @@ jobs:
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           X02_API_KEY: ${{ secrets.X02_API_KEY }}
+          CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
+          FLIQ_API_KEY: ${{ secrets.FLIQ_API_KEY }}
         run: |
           python publish_queue.py
 
