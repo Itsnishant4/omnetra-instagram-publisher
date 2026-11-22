@@ -47,6 +47,8 @@ jobs:
           IG_USER_ID_OMNETRA: ${{ secrets.IG_USER_ID_OMNETRA }}
           META_ACCESS_TOKEN_VIDLINKS: ${{ secrets.META_ACCESS_TOKEN_VIDLINKS }}
           IG_USER_ID_VIDLINKS: ${{ secrets.IG_USER_ID_VIDLINKS }}
+          META_ACCESS_TOKEN_PICTURE_BLUE_4: ${{ secrets.META_ACCESS_TOKEN_PICTURE_BLUE_4 }}
+          IG_USER_ID_PICTURE_BLUE_4: ${{ secrets.IG_USER_ID_PICTURE_BLUE_4 }}
           X02_API_KEY: ${{ secrets.X02_API_KEY }}
           CRONJOB_API_KEY: ${{ secrets.CRONJOB_API_KEY }}
           FLIQ_API_KEY: ${{ secrets.FLIQ_API_KEY }}

@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import time
+import re
 import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -26,18 +27,61 @@ META_ACCESS_TOKEN_OMNETRA = os.environ.get("META_ACCESS_TOKEN_OMNETRA", "").stri
 IG_USER_ID_OMNETRA = os.environ.get("IG_USER_ID_OMNETRA", "").strip()
 META_ACCESS_TOKEN_VIDLINKS = os.environ.get("META_ACCESS_TOKEN_VIDLINKS", "").strip()
 IG_USER_ID_VIDLINKS = os.environ.get("IG_USER_ID_VIDLINKS", "").strip()
+META_ACCESS_TOKEN_PICTURE_BLUE_4 = os.environ.get("META_ACCESS_TOKEN_PICTURE_BLUE_4", "").strip()
+IG_USER_ID_PICTURE_BLUE_4 = os.environ.get("IG_USER_ID_PICTURE_BLUE_4", "").strip()
 X02_API_KEY = os.environ.get("X02_API_KEY", "").strip()
 CRONJOB_API_KEY = os.environ.get("CRONJOB_API_KEY", "").strip()
 FLIQ_API_KEY = os.environ.get("FLIQ_API_KEY", "").strip()
 
 
 def resolve_account_credentials(item):
-    """Resolves (ig_user_id, access_token) securely from environment secrets or legacy queue fields."""
-    target_acc = str(item.get("target_account") or "").lower()
+    """Resolves (ig_user_id, access_token) dynamically and securely from environment secrets or item fields."""
+    target_acc = str(item.get("target_account") or "").strip().lower()
     item_ig = str(item.get("ig_user_id") or "").strip()
     caption = str(item.get("caption") or "").lower()
     x02_fn = str(item.get("x02_filename") or "").lower()
 
+    # 1. Direct explicit token in item (if provided)
+    if item.get("access_token"):
+        return item_ig, str(item["access_token"]).strip()
+
+    # 2. Dynamic lookup by sanitized handle suffix
+    # e.g., @picture_blue_4 -> PICTURE_BLUE_4
+    # e.g., @vidlinks.pro -> VIDLINKS_PRO or VIDLINKS
+    # e.g., @omnetra.infotech -> OMNETRA_INFOTECH or OMNETRA
+    clean_handle = re.sub(r'[^A-Za-z0-9]+', '_', target_acc).strip('_').upper()
+    if clean_handle:
+        # Check direct env var: META_ACCESS_TOKEN_PICTURE_BLUE_4
+        tok = os.environ.get(f"META_ACCESS_TOKEN_{clean_handle}", "").strip()
+        ig_id = os.environ.get(f"IG_USER_ID_{clean_handle}", "").strip() or item_ig
+        if tok:
+            return ig_id, tok
+
+        # Also check without trailing common suffixes (like _PRO, _INFOTECH, etc.)
+        for suffix in ("_PRO", "_INFOTECH", "_OFFICIAL", "_HQ", "_APP"):
+            if clean_handle.endswith(suffix):
+                short_handle = clean_handle[:-len(suffix)]
+                tok = os.environ.get(f"META_ACCESS_TOKEN_{short_handle}", "").strip()
+                ig_id = os.environ.get(f"IG_USER_ID_{short_handle}", "").strip() or item_ig
+                if tok:
+                    return ig_id, tok
+
+    # 3. Dynamic lookup across all META_ACCESS_TOKEN_* in os.environ
+    for k, v in os.environ.items():
+        if k.startswith("META_ACCESS_TOKEN_") and v.strip():
+            acc_key = k[len("META_ACCESS_TOKEN_"):].lower()
+            if not acc_key or acc_key in ("omnetra", "vidlinks"):
+                continue
+            # Check if this env key is in the handle or vice versa
+            if acc_key in target_acc or (clean_handle and acc_key in clean_handle.lower()):
+                matched_ig = os.environ.get(f"IG_USER_ID_{k[len('META_ACCESS_TOKEN_'):]}", "").strip() or item_ig
+                return matched_ig, v.strip()
+            # Check if IG_USER_ID_<KEY> matches item_ig
+            corresponding_ig = os.environ.get(f"IG_USER_ID_{k[len('META_ACCESS_TOKEN_'):]}", "").strip()
+            if corresponding_ig and corresponding_ig == item_ig:
+                return item_ig, v.strip()
+
+    # 4. Standard Vidlinks resolution
     is_vidlinks = (
         "vidlinks" in target_acc
         or (IG_USER_ID_VIDLINKS and item_ig == IG_USER_ID_VIDLINKS)
@@ -48,6 +92,28 @@ def resolve_account_credentials(item):
         resolved_ig = item_ig or IG_USER_ID_VIDLINKS or IG_USER_ID
         resolved_tok = META_ACCESS_TOKEN_VIDLINKS or item.get("access_token") or META_ACCESS_TOKEN
         return resolved_ig, resolved_tok
+
+    # 5. Standard Omnetra resolution
+    is_omnetra = (
+        "omnetra" in target_acc
+        or (IG_USER_ID_OMNETRA and item_ig == IG_USER_ID_OMNETRA)
+        or "omnetra" in x02_fn
+        or "omnetra" in caption
+    )
+    if is_omnetra:
+        resolved_ig = item_ig or IG_USER_ID_OMNETRA or IG_USER_ID
+        resolved_tok = META_ACCESS_TOKEN_OMNETRA or item.get("access_token") or META_ACCESS_TOKEN
+        return resolved_ig, resolved_tok
+
+    # 6. Specific account guard: If target_account was specified for a distinct third account
+    # but no matching token exists in secrets, DO NOT fall back to Omnetra token!
+    if target_acc and not any(k in target_acc for k in ("omnetra", "default")):
+        if META_ACCESS_TOKEN and (not IG_USER_ID or IG_USER_ID == item_ig):
+            return item_ig or IG_USER_ID, META_ACCESS_TOKEN
+        raise RuntimeError(
+            f"No Meta access token found in environment secrets for account '{target_acc}' (IG ID: {item_ig}). "
+            f"Please set GitHub Secret 'META_ACCESS_TOKEN_{clean_handle}'."
+        )
 
     resolved_ig = item_ig or IG_USER_ID_OMNETRA or IG_USER_ID
     resolved_tok = META_ACCESS_TOKEN_OMNETRA or item.get("access_token") or META_ACCESS_TOKEN
