@@ -9,6 +9,8 @@
   "reel_id": "reel_37",
   "target_account": "@picture_blue_4",
   "ig_user_id": "17841457022644778",
-  "fliq_job_id": "bf13b9c5-6a29-4407-9161-6a5877e06c47",
-  "cloud_runner": "fliq.sh"
+  "cloud_runner": "fliq.sh",
+  "retry_count": 1,
+  "last_error": "Failed to create container: {\"error\": {\"message\": \"(#10) Application does not have permission for this action\", \"code\": 10, \"type\": \"OAuthException\", \"fbtrace_id\": \"ASsb6k35oIwXVfSQb5cuzDg\"}}",
+  "last_failed_at": "2026-11-22T13:00:21.046301+00:00"
 }
