@@ -2,15 +2,13 @@
   "media_type": "REELS",
   "media_url": "https://nishant4.x02.me/i/SGMq49.mp4",
   "x02_filename": "SGMq49.mp4",
-  "caption": "Link in bio.....\n\n\ud83d\udc49 Follow @picture_blue_4 for more updates!",
-  "publish_at": "2026-11-22T18:30:00+05:30",
+  "caption": "Link in bio.....\n\n👉 Follow @picture_blue_4 for more updates!",
+  "publish_at": "2026-11-22T18:51:16+05:30",
   "queued_at": "2026-11-22T12:51:56.753376+00:00",
   "status": "QUEUED",
   "reel_id": "reel_37",
   "target_account": "@picture_blue_4",
   "ig_user_id": "17841457022644778",
   "cloud_runner": "fliq.sh",
-  "retry_count": 1,
-  "last_error": "Failed to create container: {\"error\": {\"message\": \"(#10) Application does not have permission for this action\", \"code\": 10, \"type\": \"OAuthException\", \"fbtrace_id\": \"ASsb6k35oIwXVfSQb5cuzDg\"}}",
-  "last_failed_at": "2026-11-22T13:00:21.046301+00:00"
+  "retry_count": 0
 }
